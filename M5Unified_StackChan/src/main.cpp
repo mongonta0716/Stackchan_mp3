@@ -6,27 +6,34 @@
 #include <AudioFileSourceBuffer.h>
 #include <Avatar.h> // https://github.com/meganetaaan/m5stack-avatar
 #include <ServoEasing.hpp> // https://github.com/ArminJo/ServoEasing       
-#if defined(ARDUINO_M5STACK_CORES3)
-  #include <gob_unifiedButton.hpp>
-  goblib::UnifiedButton unifiedButton;
-#endif
 
 #define USE_SERVO
 #ifdef USE_SERVO
 #if defined(ARDUINO_M5STACK_Core2)
-  // #define SERVO_PIN_X 13  //Core2 PORT C
-  // #define SERVO_PIN_Y 14
- #define SERVO_PIN_X 13  //Core2 PORT A
- #define SERVO_PIN_Y 14
+  // M5Stack Core2用のサーボの設定
+  // Port.A X:G33, Y:G32
+  // Port.C X:G13, Y:G14
+  // スタックチャン基板 X:G19, Y:G27
+  #define SERVO_PIN_X 33
+  #define SERVO_PIN_Y 32
 #elif defined( ARDUINO_M5STACK_FIRE )
-  #define SERVO_PIN_X 21
-  #define SERVO_PIN_Y 22
-#elif defined( ARDUINO_M5Stack_Core_ESP32 )
-  #define SERVO_PIN_X 21
-  #define SERVO_PIN_Y 22
+  // M5Stack Fireの場合はPort.A(X:G22, Y:G21)のみです。
+  // I2Cと同時利用は不可
+  #define SERVO_PIN_X 22
+  #define SERVO_PIN_Y 21
+#if SERVO_PIN_X == 22
+  // FireでPort.Aを使う場合は内部I2CをOffにする必要がある。
+  #define CORE_PORT_A
+#endif
 #elif defined( ARDUINO_M5STACK_CORES3 )
-  #define SERVO_PIN_X 1
+  // M5Stack CoreS3用の設定 ※暫定的にplatformio.iniにARDUINO_M5STACK_CORES3を定義しています。
+  // Port.A X:G1 Y:G2
+  // Port.B X:G8 Y:G9
+  // Port.C X:18 Y:17
+  #define SERVO_PIN_X 1 
   #define SERVO_PIN_Y 2
+  #include <gob_unifiedButton.hpp> // 2023/5/12現在 M5UnifiedにBtnA等がないのでGobさんのライブラリを使用
+  goblib::UnifiedButton unifiedButton;
 #endif
 #endif
 
@@ -40,7 +47,7 @@ static AudioOutputM5Speaker out(&M5.Speaker, m5spk_virtual_channel);
 static AudioGeneratorMP3 mp3;
 static AudioFileSourceSD *file = nullptr;
 static AudioFileSourceBuffer *buff = nullptr;
-const int preallocateBufferSize = 100*1024;
+const int preallocateBufferSize = 200*1024; // 大きくしたい場合はPSRAMが必要です。
 uint8_t *preallocateBuffer;
 
 using namespace m5avatar;
@@ -69,8 +76,31 @@ void play(const char* fname)
   delay(10);
   while (mp3.isRunning())
   {
-//    while(wav.loop()) {delay(1);}
-    while(mp3.loop()) {}
+    while(mp3.loop()) {
+#if defined( ARDUINO_M5STACK_CORES3 )
+      unifiedButton.update(); // M5.update()よりも前に呼ぶこと
+#endif
+      M5.update();
+      if (M5.BtnA.wasDecideClickCount()) {
+        switch(M5.BtnA.getClickCount()) {
+          case 1: // Volume Up
+            M5_LOGI("A:1");
+            
+            break;
+
+          case 2:
+            M5_LOGI("A:2");
+            break;
+          case 3: // Volume 
+            M5_LOGI("A:3");
+
+            break;
+          default:
+            break;
+        }
+
+      }
+    }
       mp3.stop(); 
       file->close();
       delete file;
@@ -149,13 +179,10 @@ void servo(void *args)
     }
     synchronizeAllServosStartAndWaitForAllServosToStop();
 #endif
-    delay(5000);
+    vTaskDelay((2000 + 100 * random(20))/portTICK_PERIOD_MS);
   }
 }
 
-static void speachTask(void*)
-{
-}
 
 void Servo_setup() {
 #ifdef USE_SERVO
@@ -175,7 +202,7 @@ void file_read()
 {
  // SDカードマウント待ち
  int time_out = 0;
-  while (false == SD.begin(GPIO_NUM_4, SPI, 15000000)) {
+  while (false == SD.begin(GPIO_NUM_4, SPI, 10000000)) {
     if(time_out++ > 6) return;
     Serial.println("SD Wait...");
     M5.Lcd.println("SD Wait...");
@@ -228,6 +255,8 @@ void setup() {
 #if defined( ARDUINO_M5STACK_CORES3 )
   unifiedButton.begin(&M5.Display, goblib::UnifiedButton::appearance_t::transparent_all);
 #endif
+  M5.Log.setLogLevel(m5::log_target_serial, ESP_LOG_INFO);
+  M5.Log.setEnableColor(m5::log_target_serial, false);
 
   preallocateBuffer = (uint8_t *)malloc(preallocateBufferSize);
   if (!preallocateBuffer) {
@@ -254,8 +283,8 @@ void setup() {
   M5.Lcd.setCursor(0,0);
   M5.Lcd.setTextSize(2);
   M5.Speaker.begin();
-  M5.Speaker.setChannelVolume(m5spk_virtual_channel, 180);
-  M5.Speaker.setVolume(180);
+  M5.Speaker.setChannelVolume(m5spk_virtual_channel, 200);
+  M5.Speaker.setVolume(200);
 
   M5.Speaker.tone(2000, 100);
   Servo_setup();
@@ -270,21 +299,43 @@ void setup() {
 }
 
 void loop() {
-  M5.update();
 #if defined( ARDUINO_M5STACK_CORES3 )
-  unifiedButton.update();
+  unifiedButton.update(); // M5.update()よりも前に呼ぶこと
 #endif
+  M5.update();
+  if (M5.BtnA.wasClicked()) {
+    M5_LOGI("MainLoopClicked");
+  }
+  if (M5.BtnA.wasDecideClickCount()) {
+    switch(M5.BtnA.getClickCount()) {
+      case 1: // Volume Up
+        M5_LOGI("A:1");
+        
+        break;
+
+      case 2:
+        M5_LOGI("A:2");
+        break;
+      case 3: // Volume 
+        M5_LOGI("A:3");
+
+        break;
+      default:
+        break;
+    }
+    
+  }
   float gazeX, gazeY;
   int data_index = 0;
-  avatar.getGaze(&gazeY, &gazeX);
   if(!mp3.isRunning()) {
     data_index = random(0, fileCount);
     Serial.printf("data_index = %d fileCount = %d \r\n", data_index, fileCount);
     if(data_index < fileCount){
+      vTaskDelay(2000 + 1500 * random(20));
       avatar.setExpression(Expression::Happy);
       // Serial.printf("data_index-data_num = %d\r\n", data_index-data_num);
       play(fileList[data_index].c_str());
     }
-    vTaskDelay(2000 + 1500 * random(20));
   }
+  delay(1);
 }
