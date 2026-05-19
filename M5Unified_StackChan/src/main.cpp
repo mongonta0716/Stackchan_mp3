@@ -5,7 +5,8 @@
 #include <AudioGeneratorMP3.h>
 #include <AudioFileSourceBuffer.h>
 #include <Avatar.h> // https://github.com/meganetaaan/m5stack-avatar
-#include <ServoEasing.hpp> // https://github.com/ArminJo/ServoEasing       
+#include <Stackchan_system_config.h> // https://github.com/stack-chan/stackchan-arduino
+#include <Stackchan_servo.h> // https://github.com/stack-chan/stackchan-arduino
 #if defined(ARDUINO_M5STACK_CORES3)
   #include <gob_unifiedButton.hpp>
   goblib::UnifiedButton unifiedButton;
@@ -45,6 +46,7 @@ uint8_t *preallocateBuffer;
 
 using namespace m5avatar;
 Avatar avatar;
+StackchanSystemConfig system_config;
 
 void stop(void)
 {
@@ -83,11 +85,8 @@ void play(const char* fname)
 }
 
 #ifdef USE_SERVO
-#define START_DEGREE_VALUE_X 90
-//#define START_DEGREE_VALUE_Y 90
-#define START_DEGREE_VALUE_Y 70 //
-ServoEasing servo_x;
-ServoEasing servo_y;
+static constexpr uint32_t SERVO_MOVE_DURATION_MS = 500;
+StackchanSERVO stackchanServo;
 #endif
 static fft_t fft;
 static int16_t raw_data[WAVE_SIZE * 2];
@@ -139,15 +138,18 @@ void servo(void *args)
   {
 #ifdef USE_SERVO
     avatar->getGaze(&gazeY, &gazeX);
-    servo_x.setEaseTo(START_DEGREE_VALUE_X + (int)(20.0 * gazeX));
+    int servoX = system_config.getServoInfo(AXIS_X)->start_degree + (int)(20.0 * gazeX);
+    int servoY = system_config.getServoInfo(AXIS_Y)->start_degree;
     if(gazeY < 0) {
       int tmp = (int)(15.0 * gazeY);
       if(tmp > 15) tmp = 15;
-      servo_y.setEaseTo(START_DEGREE_VALUE_Y + tmp);
+      servoY += tmp;
     } else {
-      servo_y.setEaseTo(START_DEGREE_VALUE_Y + (int)(10.0 * gazeY));
+      servoY += (int)(10.0 * gazeY);
     }
-    synchronizeAllServosStartAndWaitForAllServosToStop();
+    servoX = constrain(servoX, system_config.getServoInfo(AXIS_X)->lower_limit, system_config.getServoInfo(AXIS_X)->upper_limit);
+    servoY = constrain(servoY, system_config.getServoInfo(AXIS_Y)->lower_limit, system_config.getServoInfo(AXIS_Y)->upper_limit);
+    stackchanServo.moveXY(servoX, servoY, SERVO_MOVE_DURATION_MS);
 #endif
     delay(5000);
   }
@@ -159,16 +161,27 @@ static void speachTask(void*)
 
 void Servo_setup() {
 #ifdef USE_SERVO
-  if (servo_x.attach(SERVO_PIN_X, START_DEGREE_VALUE_X, DEFAULT_MICROSECONDS_FOR_0_DEGREE, DEFAULT_MICROSECONDS_FOR_180_DEGREE)) {
-    Serial.print("Error attaching servo x");
-  }
-  if (servo_y.attach(SERVO_PIN_Y, START_DEGREE_VALUE_Y, DEFAULT_MICROSECONDS_FOR_0_DEGREE, DEFAULT_MICROSECONDS_FOR_180_DEGREE)) {
-    Serial.print("Error attaching servo y");
-  }
-  servo_x.setEasingType(EASE_QUADRATIC_IN_OUT);
-  servo_y.setEasingType(EASE_QUADRATIC_IN_OUT);
-  setSpeedForAllServos(30);
+  stackchanServo.begin(system_config.getServoInfo(AXIS_X)->pin,
+                       system_config.getServoInfo(AXIS_X)->start_degree,
+                       system_config.getServoInfo(AXIS_X)->offset,
+                       system_config.getServoInfo(AXIS_Y)->pin,
+                       system_config.getServoInfo(AXIS_Y)->start_degree,
+                       system_config.getServoInfo(AXIS_Y)->offset,
+                       (ServoType)system_config.getServoType(),
+                       &M5.In_I2C);
 #endif
+}
+
+void config_read()
+{
+  int time_out = 0;
+  while (false == SD.begin(GPIO_NUM_4, SPI, 15000000)) {
+    if(time_out++ > 6) break;
+    Serial.println("SD Wait...");
+    M5.Lcd.println("SD Wait...");
+    delay(500);
+  }
+  system_config.loadConfig(SD, "");
 }
 
 void file_read()
@@ -254,8 +267,9 @@ void setup() {
   M5.Lcd.setCursor(0,0);
   M5.Lcd.setTextSize(2);
   M5.Speaker.begin();
-  M5.Speaker.setChannelVolume(m5spk_virtual_channel, 180);
-  M5.Speaker.setVolume(180);
+  config_read();
+  M5.Speaker.setChannelVolume(m5spk_virtual_channel, system_config.getBluetoothSetting()->start_volume);
+  M5.Speaker.setVolume(system_config.getBluetoothSetting()->start_volume);
 
   M5.Speaker.tone(2000, 100);
   Servo_setup();

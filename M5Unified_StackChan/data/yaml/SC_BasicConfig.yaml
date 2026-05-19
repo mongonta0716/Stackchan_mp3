@@ -1,0 +1,80 @@
+servo:
+  pin:
+    # ServoPin
+    # Core1 PortA X:22,Y:21 PortC X:16,Y:17
+    # Core2 PortA X:33,Y:32 PortC X:13,Y:14
+    # CoreS3 PortA X:2, Y:1 PortB X:9, Y:8 PortC X:17, Y:18
+    # Stack-chanPCB Core1 X:5,Y:2 Core2 X:19,Y27
+    # When using SCS0009 or Dynamixel XL330, x:RX, y:TX (not used)
+    # RT Version: x:6 y:7
+    # M5StackChan: x:7 y:6
+    x: 7
+    y: 6
+  offset:
+    # Specified by +- from 90 degree during servo initialization
+    x: 0
+    y: 0
+  center:
+    # Servo initial position
+    # SG90: x:90 y:90
+    # SCS0009: x:150, y:150
+    # Dynamixel XL330: x:180, y:270
+    # RT Version X:180 Y:5
+    # M5StackChan: x:150, y:90
+    x: 150
+    y: 90
+  lower_limit:
+    # Movable range lower limit. Depending on mounting direction,
+    # the physical lower direction may be reversed; specify the smaller value.
+    # SG90: x:0, y:60
+    # SCS0009: x:0, y:120
+    # Dynamixel XL330: x:0, y:220
+    # RT Version X:90 Y:-5
+    # M5StackChan: x:0 y:0
+    x: 0
+    y: 0
+  upper_limit:
+    # Movable range upper limit. Depending on mounting direction,
+    # the physical upper direction may be reversed; specify the larger value.
+    # SG90: x:180, y:90
+    # SCS0009: x:300, y:150
+    # Dynamixel XL330: x:360, y:270
+    # Dynamixel RTVersion X:270 Y:15
+    # M5StackChan: x:300 y:90
+    x: 300
+    y: 90
+  speed:
+    normal_mode:
+      interval_min: 3000
+      interval_max: 6000
+      move_min: 500
+      move_max: 1500
+    sing_mode:
+      interval_min: 500
+      interval_max: 1000
+      move_min: 500
+      move_max: 1000
+takao_base: false # Whether to use takaobase to feed power from the rear connector.(Stack-chan_Takao_Base  https://ssci.to/8905)
+servo_type: "M5_SCS" # "PWM": SG90PWMServo, "SCS": Feetech SCS0009 "DYN_XL330": Dynamixel XL330, "RT_DYN_XL330": RTVersion "M5_SCS": M5StackChan Servo
+
+### Settings below vary by application.
+bluetooth:
+  device_name: "M5StackBTSPK"
+  starting_state: false
+  start_volume: 180
+auto_power_off_time: 0 # Core2 Only. time(msec) of auto power off(0 is disable.)
+balloon:
+  font_language: "JA" # "JA or CN or Default"
+  lyrics: # A maximum of 10 can be specified.
+    - "こんにちは"
+    - "Hello"
+    - "私はスタックチャン"
+led_lr: 0 # 0:stereo, 1:left_only, 2:right_only
+led_pin: -1 # GoBottom1:15 GoBottom2:25
+
+# Use these settings when using extension configuration files.
+extend_config_filename: ""     # "/yaml/SC_ExConfig.yaml"     # Configuration file for the application.
+extend_config_filesize: 0      # 2048                         # Buffer size for feature extensions
+secret_config_filename: ""     # "/yaml/SC_SecConfig.yaml"    # Configuration file for personal information.
+secret_config_filesize: 0      # 2048                         # Buffer size for personal information.
+secret_info_show: false                                       # Whether personal information is output to the log or not.
