@@ -41,8 +41,12 @@ static AudioOutputM5Speaker out(&M5.Speaker, m5spk_virtual_channel);
 static AudioGeneratorMP3 mp3;
 static AudioFileSourceSD *file = nullptr;
 static AudioFileSourceBuffer *buff = nullptr;
-const int preallocateBufferSize = 100*1024;
-uint8_t *preallocateBuffer;
+static constexpr int SD_SPI_FREQUENCY = 25000000;
+static constexpr size_t AUDIO_FILE_BUFFER_SIZE = 192 * 1024;
+static constexpr TickType_t LIPSYNC_INTERVAL_TICKS = pdMS_TO_TICKS(150);
+static bool sd_ready = false;
+uint8_t *preallocateBuffer = nullptr;
+size_t preallocateBufferSize = 0;
 
 using namespace m5avatar;
 Avatar avatar;
@@ -50,13 +54,22 @@ StackchanSystemConfig system_config;
 
 void stop(void)
 {
-  if (file == nullptr) return;
+  if (file == nullptr && buff == nullptr) return;
   out.stop();
-  mp3.stop();
+  if (mp3.isRunning()) {
+    mp3.stop();
+  }
 //  id3->RegisterMetadataCB(nullptr, nullptr);
 //  id3->close();
-  file->close();
-  delete file;
+  if (buff) {
+    buff->close();
+    delete buff;
+    buff = nullptr;
+  }
+  if (file) {
+    file->close();
+    delete file;
+  }
   file = nullptr;
 }
 
@@ -68,20 +81,15 @@ void play(const char* fname)
   buff = new AudioFileSourceBuffer(file, preallocateBuffer, preallocateBufferSize);
 //  wav.begin(file, &out);
   mp3.begin(buff, &out);
-  delay(10);
-  while (mp3.isRunning())
-  {
-//    while(wav.loop()) {delay(1);}
-    while(mp3.loop()) {}
-      mp3.stop(); 
-      file->close();
-      delete file;
-      delete buff;
-      file = nullptr;
-      buff = nullptr;
-      avatar.setExpression(Expression::Neutral);
-//    }
+  while (mp3.isRunning()) {
+//  wav.loop();
+    if (!mp3.loop()) {
+      break;
+    }
+    vTaskDelay(1);
   }
+  stop();
+  avatar.setExpression(Expression::Neutral);
 }
 
 #ifdef USE_SERVO
@@ -97,21 +105,26 @@ void lipSync(void *args)
 {
   float gazeX, gazeY;
   int level = 0;
+  uint32_t last_update_count = 0;
   DriveContext *ctx = (DriveContext *)args;
   Avatar *avatar = ctx->getAvatar();
    for (;;)
   {
     uint64_t level = 0;
-    auto buf = out.getBuffer();
-    if (buf) {
-     memcpy(raw_data, buf, WAVE_SIZE * 2 * sizeof(int16_t));
-      fft.exec(raw_data);
-      for (size_t bx = 5; bx <= 60; ++bx) { // リップシンクで抽出する範囲はここで指定(低音)0〜64（高音）
-        int32_t f = fft.get(bx);
-        level += abs(f);
-        //Serial.printf("bx:%d, f:%d\n", bx, f) ;
+    uint32_t update_count = out.getUpdateCount();
+    if (update_count != last_update_count) {
+      last_update_count = update_count;
+      auto buf = out.getBuffer();
+      if (buf) {
+        memcpy(raw_data, buf, WAVE_SIZE * 2 * sizeof(int16_t));
+        fft.exec(raw_data);
+        for (size_t bx = 6; bx <= 48; bx += 2) { // 再生負荷を抑えるため、リップシンク用の帯域を間引いて集計する。
+          int32_t f = fft.get(bx);
+          level += abs(f);
+          //Serial.printf("bx:%d, f:%d\n", bx, f) ;
+        }
+        //Serial.printf("level:%d\n", level >> 16);
       }
-      //Serial.printf("level:%d\n", level >> 16);
     }
 
     // スレッド内でログを出そうとすると不具合が起きる場合があります。
@@ -125,7 +138,7 @@ void lipSync(void *args)
     }
     avatar->setMouthOpenRatio(mouth_ratio);
 
-    vTaskDelay(50/portTICK_PERIOD_MS);
+    vTaskDelay(LIPSYNC_INTERVAL_TICKS);
   }
 }
 
@@ -174,26 +187,13 @@ void Servo_setup() {
 
 void config_read()
 {
-  int time_out = 0;
-  while (false == SD.begin(GPIO_NUM_4, SPI, 15000000)) {
-    if(time_out++ > 6) break;
-    Serial.println("SD Wait...");
-    M5.Lcd.println("SD Wait...");
-    delay(500);
-  }
   system_config.loadConfig(SD, "");
 }
 
 void file_read()
 {
  // SDカードマウント待ち
- int time_out = 0;
-  while (false == SD.begin(GPIO_NUM_4, SPI, 15000000)) {
-    if(time_out++ > 6) return;
-    Serial.println("SD Wait...");
-    M5.Lcd.println("SD Wait...");
-    delay(500);
-  }
+  if (!sd_ready) return;
   File root = SD.open("/mp3");
   if (root) {
     File file = root.openNextFile();
@@ -215,6 +215,7 @@ void file_read()
           }
         }
       }
+      file.close();
       file = root.openNextFile();
     }
     root.close();
@@ -242,12 +243,6 @@ void setup() {
   unifiedButton.begin(&M5.Display, goblib::UnifiedButton::appearance_t::transparent_all);
 #endif
 
-  preallocateBuffer = (uint8_t *)malloc(preallocateBufferSize);
-  if (!preallocateBuffer) {
-    M5.Display.printf("FATAL ERROR:  Unable to preallocate %d bytes for app\n", preallocateBufferSize);
-    for (;;) { delay(1000); }
-  }
-
   { /// custom setting
     auto spk_cfg = M5.Speaker.config();
     /// Increasing the sample_rate will improve the sound quality instead of increasing the CPU load.
@@ -255,8 +250,8 @@ void setup() {
 //    spk_cfg.sample_rate = 48000; // default:64000 (64kHz)  e.g. 48000 , 50000 , 80000 , 96000 , 100000 , 128000 , 144000 , 192000 , 200000
     //spk_cfg.task_priority = configMAX_PRIORITIES - 2;
     // 音声が途切れる場合は下記3つのパラメータを調整してみてください。（あまり増やすと動かなくなる場合あり）
-    spk_cfg.task_priority = 1;
-    spk_cfg.dma_buf_count = 20;
+    spk_cfg.task_priority = 2;
+    spk_cfg.dma_buf_count = 32;
     spk_cfg.dma_buf_len = 512;
     spk_cfg.task_pinned_core = PRO_CPU_NUM;
     M5.Speaker.config(spk_cfg);
@@ -267,7 +262,27 @@ void setup() {
   M5.Lcd.setCursor(0,0);
   M5.Lcd.setTextSize(2);
   M5.Speaker.begin();
+  for (int time_out = 0; time_out <= 6; ++time_out) {
+    if (SD.begin(GPIO_NUM_4, SPI, SD_SPI_FREQUENCY)) {
+      sd_ready = true;
+      break;
+    }
+    Serial.println("SD Wait...");
+    M5.Lcd.println("SD Wait...");
+    delay(500);
+  }
   config_read();
+  preallocateBuffer = (uint8_t *)ps_malloc(AUDIO_FILE_BUFFER_SIZE);
+  if (preallocateBuffer) {
+    preallocateBufferSize = AUDIO_FILE_BUFFER_SIZE;
+  } else {
+    preallocateBufferSize = 96 * 1024;
+    preallocateBuffer = (uint8_t *)malloc(preallocateBufferSize);
+  }
+  if (!preallocateBuffer) {
+    M5.Display.printf("FATAL ERROR: Unable to preallocate %d bytes for audio\n", preallocateBufferSize);
+    for (;;) { delay(1000); }
+  }
   M5.Speaker.setChannelVolume(m5spk_virtual_channel, system_config.getBluetoothSetting()->start_volume);
   M5.Speaker.setVolume(system_config.getBluetoothSetting()->start_volume);
 

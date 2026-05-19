@@ -55,7 +55,7 @@ class AudioOutputM5Speaker : public AudioOutput
   protected:
     m5::Speaker_Class* _m5sound;
     uint8_t _virtual_ch;
-    static constexpr size_t tri_buf_size = 640;
+    static constexpr size_t tri_buf_size = 4096;
     int16_t _tri_buffer[3][tri_buf_size];
     size_t _tri_buffer_index = 0;
     size_t _tri_index = 0;
