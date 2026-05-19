@@ -38,10 +38,11 @@ int fileCount = 0;
 
 static constexpr size_t WAVE_SIZE = 320;
 static AudioOutputM5Speaker out(&M5.Speaker, m5spk_virtual_channel);
-static AudioGeneratorMP3 mp3;
+static uint8_t mp3PreallocateBuffer[AudioGeneratorMP3::preAllocSize()];
+static AudioGeneratorMP3 mp3(mp3PreallocateBuffer, sizeof(mp3PreallocateBuffer));
 static AudioFileSourceSD *file = nullptr;
 static AudioFileSourceBuffer *buff = nullptr;
-static constexpr int SD_SPI_FREQUENCY = 25000000;
+static constexpr int SD_SPI_FREQUENCY = 10000000;
 static constexpr size_t AUDIO_FILE_BUFFER_SIZE = 192 * 1024;
 static constexpr TickType_t LIPSYNC_INTERVAL_TICKS = pdMS_TO_TICKS(150);
 static bool sd_ready = false;
